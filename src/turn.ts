@@ -8,6 +8,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { loadConfig, loadEnvFile, type AgentName, type Config } from './config.ts'
 import { commitLoop } from './commit.ts'
 import { stallGate } from './gate.ts'
+import { bold, cyan, dim, green, magenta, useColor, yellow } from './color.ts'
 import {
   advanceLoop, discoverLoops, initState, isoLocal, log, normalizeRole, readState, saveState,
   syncLoops, tsCompact, tsDay, tsSessionDay, updateLoopStatusDoc, type Role, type State,
@@ -134,13 +135,75 @@ export function assistantBlocks(line: string): AssistantBlock[] {
   } catch { return [] }
 }
 
-// The jq live filter, in-process: assistant text blocks + [tool: <name>] markers.
-// Unparseable lines are skipped silently — the watchdog appends plain text to the same log.
-function printStreamJsonLine(line: string): void {
-  for (const block of assistantBlocks(line)) {
-    if (block.type === 'text' && block.text) console.log(block.text)
-    else if (block.type === 'tool_use') console.log(`[tool: ${block.name ?? '?'}]`)
+// ── live spinner (TTY only) ────────────────────────────────────────────────────────────────
+// Replaces a flood of repeated "[tool: Bash]" lines with one line, updated in place, that
+// names the current tool and ticks a spinner while it runs. Falls back to the old plain
+// "[tool: X]" lines when stdout isn't a TTY (or NO_COLOR) — piped/CI output stays scrollable.
+
+const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+const SPELL_VERB: Record<string, string> = {
+  Bash: 'casting', Read: 'scrying', Write: 'inscribing', Edit: 'rewriting',
+  Grep: 'divining', Glob: 'summoning', WebFetch: 'channeling', Task: 'conjuring',
+}
+const spellVerb = (tool: string): string => SPELL_VERB[tool] ?? 'channeling'
+
+export function makeSpinner() {
+  let tool = ''
+  let spells = 0
+  let frame = 0
+  let drawn = false
+  let timer: NodeJS.Timeout | null = null
+
+  function erase(): void {
+    if (drawn) { process.stdout.write('\x1b[1A\x1b[2K'); drawn = false }
   }
+  function draw(): void {
+    erase()
+    if (!tool) return
+    process.stdout.write(`${magenta(SPINNER_FRAMES[frame % SPINNER_FRAMES.length])} ${spellVerb(tool)} ${tool} ${dim(`· spell #${spells}`)}\n`)
+    drawn = true
+  }
+  return {
+    onText: erase,
+    onTool(name: string): void { tool = name; spells += 1; draw() },
+    start(): void { timer = setInterval(() => { frame += 1; draw() }, 120) },
+    stop(): void { if (timer) clearInterval(timer); erase() },
+  }
+}
+
+// The jq live filter, in-process: assistant text blocks scroll normally; tool_use events
+// drive the spinner (or, without one, print the old plain "[tool: X]" marker).
+// Unparseable lines are skipped silently — the watchdog appends plain text to the same log.
+function printStreamJsonLine(line: string, spinner: ReturnType<typeof makeSpinner> | null): void {
+  for (const block of assistantBlocks(line)) {
+    if (block.type === 'text' && block.text) {
+      spinner?.onText()
+      console.log(block.text)
+    } else if (block.type === 'tool_use') {
+      const name = block.name ?? '?'
+      if (spinner) spinner.onTool(name)
+      else console.log(`[tool: ${name}]`)
+    }
+  }
+}
+
+// Printed once per turn, before the agent spawns: track/loop/turn/role at a glance, plus how
+// many times THIS loop has already bounced off qa (explicit NO) or crashed outright — derived
+// from persisted state + Progress.md, so it's correct for both `step` and `auto` alike (no
+// in-memory streak needed).
+function printTurnHeader(ctx: Ctx, s: State, role: Role, agent: AgentName, turn: number, loop: number): void {
+  const progressText = readProgress(ctx.dir)
+  const forLoop = s.session_history.filter((h) => h.loop === loop)
+  const rejected = forLoop.filter((h) => h.role === 'qa' && parseVerdict(progressText, h.turn) === 'NO').length
+  const crashed = forLoop.filter((h) => h.exit_code !== 0).length
+  const rule = dim('─'.repeat(58))
+  const retryLine = `qa rejected this loop: ${rejected}×   agent crashes: ${crashed}×`
+  console.log(rule)
+  console.log(`   ${bold('🪄 loopcast')} ${dim('·')} ${cyan(ctx.track)}`)
+  console.log(`   loop ${cyan(String(loop))} · turn ${cyan(String(turn))} · ${role} (${agent})`)
+  console.log(`   ${rejected || crashed ? yellow(retryLine) : dim(retryLine)}`)
+  console.log(rule)
+  console.log()
 }
 
 function runAgent(
@@ -157,13 +220,15 @@ function runAgent(
     // on Windows taskkill /T does that walk itself and detaching would only orphan the child.
     const child = spawn(argv[0], argv.slice(1), { cwd: o.cwd, detached: !isWin, stdio: ['ignore', 'pipe', 'pipe'], env: o.env })
     currentChild = child
+    const spinner = o.liveParse && useColor ? makeSpinner() : null
+    spinner?.start()
     child.stdout?.on('data', (chunk: Buffer) => {
       logStream.write(chunk)
       if (!o.liveParse) process.stdout.write(chunk)
     })
     // readline, not a hand-rolled splitter: it flushes the trailing partial line of a
     // killed turn and decodes multi-byte UTF-8 across chunk boundaries correctly.
-    if (o.liveParse && child.stdout) createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', printStreamJsonLine)
+    if (o.liveParse && child.stdout) createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => printStreamJsonLine(line, spinner))
     child.stderr?.on('data', (chunk: Buffer) => { logStream.write(chunk); process.stderr.write(chunk) })
     let timer: NodeJS.Timeout | undefined
     let killTimer: NodeJS.Timeout | undefined
@@ -179,6 +244,7 @@ function runAgent(
     child.on('close', (code) => {
       clearTimeout(timer)
       clearTimeout(killTimer)
+      spinner?.stop()
       logStream.end()
       currentChild = null
       // null exit code = killed → 143, matching the reference watchdog. (Windows reports
@@ -206,6 +272,7 @@ async function runTurn(ctx: Ctx, sessionId: string, budgetSeconds: number | null
   const turnLog = join(ctx.logDir, `turn-${String(turn).padStart(4, '0')}-${role}-${agent}-${tsCompact()}.log`)
   mkdirSync(ctx.logDir, { recursive: true })
   log(`turn ${turn} — loop ${loop} — ${role} (${agent})${budgetSeconds ? ` — budget ${budgetSeconds}s` : ''} — log: ${turnLog}`)
+  printTurnHeader(ctx, s, role, agent, turn, loop)
   const before = snapshot(ctx.dir)
   const startIso = isoLocal()
 
@@ -232,10 +299,10 @@ async function runTurn(ctx: Ctx, sessionId: string, budgetSeconds: number | null
   if (role === 'qa') {
     const verdict = parseVerdict(readProgress(ctx.dir), turn)
     if (verdict === 'YES') {
-      log(`qa marked loop ${loop} ready — advancing to the next loop`)
+      log(`✅ qa marked loop ${loop} ready — advancing to the next loop`)
       return { kind: 'advanced', loop, committed: passLoop(ctx, s, loop) }
     }
-    log(`qa marked loop ${loop} not ready (or gave no verdict) — another dev pass on the same loop`)
+    log(`❌ qa marked loop ${loop} not ready (or gave no verdict) — another dev pass on the same loop`)
     s.current_actor = 'dev'
     saveState(ctx.dir, s)
     return { kind: 'rejected', loop, explicitNo: verdict === 'NO', entry: turnEntry(readProgress(ctx.dir), turn) }
@@ -420,8 +487,9 @@ export async function status(track: string, json: boolean): Promise<number> {
     console.log(JSON.stringify(s, null, 2))
     return 0
   }
-  console.log(`track:      ${s.track}`)
-  console.log(`status:     ${s.status}`)
+  const statusColor = { running: cyan, completed: green, interrupted: yellow, idle: dim }[s.status]
+  console.log(`track:      ${cyan(s.track)}`)
+  console.log(`status:     ${statusColor(s.status)}`)
   console.log(`loop:       ${s.current_loop ?? 'none (all done)'}   completed: [${s.completed_loops.join(', ')}]   remaining: [${s.remaining_loops.join(', ')}]`)
   console.log(`session:    ${s.session_id ?? '—'}   turns so far: ${s.turn}`)
   if (s.current_loop !== null) console.log(`next turn:  ${s.turn + 1} — ${nextTurnSummary(ctx, s)}`)

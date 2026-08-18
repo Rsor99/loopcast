@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildAgentCmd, kickoff } from '../src/turn.ts'
+import { buildAgentCmd, kickoff, makeSpinner } from '../src/turn.ts'
 import type { Config } from '../src/config.ts'
 
 const cfg: Config = {
@@ -59,4 +59,41 @@ test('codex command: workspace-write sandbox, prompt + kickoff in one argument',
     '-C', '/repo',
   ])
   assert.equal(cmd[8], `PROMPT\n\n---\n${kickoff('t', 's1', 3, 'qa')}`)
+})
+
+// Captures process.stdout.write calls for the duration of fn, restoring the real write after.
+function captureWrites(fn: () => void): string[] {
+  const calls: string[] = []
+  const real = process.stdout.write.bind(process.stdout)
+  process.stdout.write = ((chunk: string) => { calls.push(chunk); return true }) as typeof process.stdout.write
+  try { fn() } finally { process.stdout.write = real }
+  return calls
+}
+
+test('spinner: first draw has nothing to erase; a name change erases the previous line first', () => {
+  const spinner = makeSpinner()
+  const calls = captureWrites(() => {
+    spinner.onTool('Bash') // nothing drawn yet — no erase, one line written
+    spinner.onTool('Read') // a line IS drawn — erase (cursor up + clear) precedes the redraw
+  })
+  assert.equal(calls.length, 3) // [draw Bash] [erase] [draw Read]
+  assert.ok(calls[0].includes('Bash') && !calls[0].startsWith('\x1b[1A'))
+  assert.equal(calls[1], '\x1b[1A\x1b[2K')
+  assert.ok(calls[2].includes('Read'))
+})
+
+test('spinner: onText erases a drawn line but writes nothing if none is drawn', () => {
+  const spinner = makeSpinner()
+  const beforeAnyTool = captureWrites(() => spinner.onText())
+  assert.deepEqual(beforeAnyTool, [])
+  captureWrites(() => spinner.onTool('Bash'))
+  const afterTool = captureWrites(() => spinner.onText())
+  assert.deepEqual(afterTool, ['\x1b[1A\x1b[2K'])
+})
+
+test('spinner: stop() clears the interval and erases the last drawn line', () => {
+  const spinner = makeSpinner()
+  captureWrites(() => spinner.onTool('Bash'))
+  const calls = captureWrites(() => spinner.stop())
+  assert.deepEqual(calls, ['\x1b[1A\x1b[2K'])
 })

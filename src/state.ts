@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { dim } from './color.ts'
 
 export type Role = 'dev' | 'qa'
 
@@ -132,5 +133,5 @@ export const tsHuman = (d = new Date()): string => { const p = parts(d); return 
 
 export function log(msg: string): void {
   const p = parts(new Date())
-  console.log(`[${p.Y}-${p.M}-${p.D} ${p.h}:${p.m}:${p.s} ${p.z}] ${msg}`)
+  console.log(`${dim(`[${p.Y}-${p.M}-${p.D} ${p.h}:${p.m}:${p.s} ${p.z}]`)} ${msg}`)
 }

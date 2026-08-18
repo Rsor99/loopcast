@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { readState, type HistoryEntry } from './state.ts'
 import { makeCtx, assistantBlocks } from './turn.ts'
+import { cyan, dim, green, red } from './color.ts'
 
 // Shell/text patterns worth flagging wherever they appear in a tool call's input (claude) or
 // the raw log text (codex, best-effort — see parseCodexTurn). Data, not code: extend this list
@@ -118,7 +119,7 @@ const fmtCounts = (o: Record<string, number>): string => Object.entries(o).map((
 const fmtTools = (o: Record<string, number>): string => Object.entries(o).map(([k, v]) => `${k} x${v}`).join(', ') || '—'
 
 function printReport(r: AnalystReport): void {
-  console.log(`track:               ${r.track}`)
+  console.log(`track:               ${cyan(r.track)}`)
   console.log(`turns total:         ${r.turnsTotal}`)
   console.log(`loops completed:     ${r.loopsCompleted}   touched: ${r.loopsTouched}`)
   console.log(`avg turns/loop:      ${r.avgTurnsPerCompletedLoop === null ? 'n/a (no completed loops yet)' : r.avgTurnsPerCompletedLoop.toFixed(1)}`)
@@ -134,13 +135,13 @@ function printReport(r: AnalystReport): void {
   for (const [name, n] of Object.entries(r.toolUsageTotal)) console.log(`  ${name}  ${n}`)
   console.log()
   if (r.findings.length === 0) {
-    console.log('dangerous findings:  none')
+    console.log(`dangerous findings:  ${green('none')}`)
   } else {
-    console.log(`⚠ dangerous findings: ${r.findings.length}`)
-    for (const f of r.findings) console.log(`  turn ${f.turn}  ${f.role} (${f.actor})  ${f.tool}  [${f.pattern}]  ${f.snippet}`)
+    console.log(red(`⚠ dangerous findings: ${r.findings.length}`))
+    for (const f of r.findings) console.log(`  turn ${f.turn}  ${f.role} (${f.actor})  ${f.tool}  ${red(`[${f.pattern}]`)}  ${f.snippet}`)
   }
   console.log()
-  console.log(`dangerous patterns checked (n=${r.dangerousPatterns.length}): ${r.dangerousPatterns.join(', ')}`)
+  console.log(dim(`dangerous patterns checked (n=${r.dangerousPatterns.length}): ${r.dangerousPatterns.join(', ')}`))
 }
 
 export async function analyst(track: string, json: boolean): Promise<number> {
