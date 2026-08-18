@@ -1,6 +1,6 @@
 {
   "name": "loopcast",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Dev ⇄ QA agent loop orchestrator: one agent implements, a different agent adversarially reviews, a grep-able verdict line advances the loop.",
   "type": "module",
   "bin": {
