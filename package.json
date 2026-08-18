@@ -1,0 +1,32 @@
+{
+  "name": "loopcast",
+  "version": "0.1.0",
+  "description": "Dev ⇄ QA agent loop orchestrator: one agent implements, a different agent adversarially reviews, a grep-able verdict line advances the loop.",
+  "type": "module",
+  "bin": {
+    "loopcast": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test \"test/*.test.ts\"",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "cli",
+    "orchestrator",
+    "claude",
+    "codex",
+    "qa",
+    "loop"
+  ],
+  "license": "MIT"
+}
