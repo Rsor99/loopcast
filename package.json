@@ -1,8 +1,12 @@
 {
   "name": "loopcast",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Dev ⇄ QA agent loop orchestrator: one agent implements, a different agent adversarially reviews, a grep-able verdict line advances the loop.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rsor99/loopcast.git"
+  },
   "bin": {
     "loopcast": "dist/cli.js"
   },
