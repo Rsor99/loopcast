@@ -122,18 +122,25 @@ let currentChild: ChildProcess | null = null
 let shuttingDown = false // set by the signal handler; closes the window where the auto
 // loop's continuation could spawn the next turn's detached agent after Ctrl+C
 
+// A claude --output-format stream-json line's assistant content blocks, or [] if the line
+// isn't a parseable assistant event. Shared with analyst.ts, which re-derives tool_use calls
+// from the same log files instead of re-parsing the stream-json shape a second time.
+export interface AssistantBlock { type?: string; text?: string; name?: string; input?: unknown }
+export function assistantBlocks(line: string): AssistantBlock[] {
+  if (!line.trim()) return []
+  try {
+    const obj = JSON.parse(line) as { type?: string; message?: { content?: AssistantBlock[] } }
+    return obj.type === 'assistant' ? (obj.message?.content ?? []) : []
+  } catch { return [] }
+}
+
 // The jq live filter, in-process: assistant text blocks + [tool: <name>] markers.
 // Unparseable lines are skipped silently — the watchdog appends plain text to the same log.
 function printStreamJsonLine(line: string): void {
-  if (!line.trim()) return
-  try {
-    const obj = JSON.parse(line) as { type?: string; message?: { content?: { type?: string; text?: string; name?: string }[] } }
-    if (obj.type !== 'assistant') return
-    for (const block of obj.message?.content ?? []) {
-      if (block.type === 'text' && block.text) console.log(block.text)
-      else if (block.type === 'tool_use') console.log(`[tool: ${block.name ?? '?'}]`)
-    }
-  } catch { /* skipped */ }
+  for (const block of assistantBlocks(line)) {
+    if (block.type === 'text' && block.text) console.log(block.text)
+    else if (block.type === 'tool_use') console.log(`[tool: ${block.name ?? '?'}]`)
+  }
 }
 
 function runAgent(

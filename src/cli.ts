@@ -12,8 +12,9 @@ Commands:
   auto [track]     run turns continuously until loops run out / stop / Ctrl+C
   status [track]   print state + next-turn summary (--json for raw state)
   stop [track]     ask a running \`auto\` to exit after its current turn
+  analyst [track]  turns/loop, per-turn tool usage, dangerous-command scan (--json for raw report)
 
-Track defaults to "main". Flags: --json (status), -h/--help, --version.`
+Track defaults to "main". Flags: --json (status, analyst), -h/--help, --version.`
 
 function version(): string {
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
@@ -45,6 +46,8 @@ async function main(): Promise<number> {
       return (await import('./turn.ts')).status(track, flags.includes('--json'))
     case 'stop':
       return (await import('./turn.ts')).stop(track)
+    case 'analyst':
+      return (await import('./analyst.ts')).analyst(track, flags.includes('--json'))
     default:
       console.error(`unknown command: ${cmd}\n\n${USAGE}`)
       return 1
