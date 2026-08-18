@@ -18,6 +18,10 @@
     "test": "node --test \"test/*.test.ts\"",
     "prepublishOnly": "npm run build"
   },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.0"
+  },
   "keywords": [
     "ai",
     "agents",
